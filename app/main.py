@@ -1,30 +1,47 @@
-from fastapi import FastAPI
-from app.api.routes import router
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from pydantic import BaseModel
+import uuid
+import io
+import sys
+import os
 
-# Initialize the Application
-app = FastAPI(
-    title="Eidolon: Semantic Liveness Backend",
-    description="Patent-compliant biometric backend using Zero-Shot ML (CLIP).",
-    version="1.0.0"
-)
+# Add root to python path so we can import brivas_security
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Connect the 'Traffic Controller' (Routes) we built in Step 3
-app.include_router(router, prefix="/api/v1")
+from brivas_security import _verify_image_content, _get_secure_challenge
+
+app = FastAPI(title="Eidolon Liveness API", version="1.0.0")
+
+ACTIVE_CHALLENGES = {}
 
 @app.get("/")
-def root():
-    """
-    System Health Check.
-    Returns the status of the server.
-    """
-    return {
-        "system": "Eidolon Biometric Backend",
-        "status": "ONLINE", 
-        "patent_compliance": "ACTIVE",
-        "model": "OpenAI CLIP ViT-B/32"
-    }
+async def root():
+    return {"status": "active", "system": "Eidolon 3-Fish Liveness"}
 
-if __name__ == "__main__":
-    import uvicorn
-    # Run the server on port 8000
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+@app.get("/challenge")
+async def get_challenge():
+    session_id = str(uuid.uuid4())
+    prompt_text = _get_secure_challenge()
+    user_instruction = prompt_text.replace("a photo of a person ", "")
+    ACTIVE_CHALLENGES[session_id] = prompt_text
+    print(f"   [SESSION] {session_id} -> {user_instruction}")
+    return {"session_id": session_id, "instruction": user_instruction}
+
+@app.post("/verify")
+async def verify_liveness(session_id: str = Form(...), file: UploadFile = File(...)):
+    target_prompt = ACTIVE_CHALLENGES.get(session_id)
+    if not target_prompt:
+        raise HTTPException(status_code=400, detail="Invalid or expired session.")
+    
+    image_bytes = await file.read()
+    print(f"   [VERIFYING] Session {session_id} against '{target_prompt}'")
+    
+    is_valid = _verify_image_content(image_bytes, target_prompt)
+    
+    # One-time use (Claim 4/5 security)
+    del ACTIVE_CHALLENGES[session_id]
+    
+    if is_valid:
+        return {"status": "success", "message": "Biometric Liveness Verified."}
+    else:
+        raise HTTPException(status_code=401, detail="Liveness Check Failed.")
